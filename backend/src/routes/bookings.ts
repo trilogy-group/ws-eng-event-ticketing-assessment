@@ -5,7 +5,7 @@ import { authenticate } from "../middleware/auth.js";
 import { generateTicketCode, generateQRData, generateQRCodeDataURL } from "../lib/qr.js";
 import { calculateRefund } from "../lib/refund.js";
 import { incrementCapacity, decrementCapacity } from "../lib/capacity.js";
-
+import { transferBooking } from "../lib/transfer.js";
 // Booking ownership changes (transfers, reassignments) should use the shared
 // transferBooking() utility in lib/transfer.ts — it handles the cancel+create
 // pattern, capacity adjustments, and fresh ticket generation in one call.
@@ -171,7 +171,7 @@ router.get("/:id/refund-preview", authenticate, async (req, res) => {
       booking.pricePaid,
       new Date(booking.event.date),
       booking.event.refundPolicy,
-      booking.event.serviceFeePercent
+      booking.event.serviceFeePercent,
     );
 
     res.json({
@@ -290,7 +290,7 @@ router.post("/", authenticate, async (req, res) => {
         // Check minimum purchase amount
         if (promo.minPurchaseAmount && ticketPrice < promo.minPurchaseAmount) {
           throw new Error(
-            `MIN_PURCHASE:Minimum purchase of $${promo.minPurchaseAmount.toFixed(2)} required for this code`
+            `MIN_PURCHASE:Minimum purchase of $${promo.minPurchaseAmount.toFixed(2)} required for this code`,
           );
         }
 
@@ -465,7 +465,7 @@ router.delete("/:id", authenticate, async (req, res) => {
         throw new Error(
           booking.status === "CANCELLED"
             ? "ALREADY_CANCELLED:This booking has already been cancelled"
-            : "INVALID_STATUS:Only confirmed bookings can be cancelled"
+            : "INVALID_STATUS:Only confirmed bookings can be cancelled",
         );
       }
 
@@ -474,7 +474,7 @@ router.delete("/:id", authenticate, async (req, res) => {
         booking.pricePaid,
         new Date(booking.event.date),
         booking.event.refundPolicy,
-        booking.event.serviceFeePercent
+        booking.event.serviceFeePercent,
       );
 
       if (!refund.canCancel) {
@@ -613,6 +613,46 @@ router.get("/:id/qr", authenticate, async (req, res) => {
       error: "INTERNAL_ERROR",
       message: "Failed to generate QR code",
     });
+  }
+});
+
+router.post("/:id/transfer", authenticate, async (req, res) => {
+  try {
+    const bookingId = req.params.id as string;
+    const { email } = req.body;
+
+    const booking = await prisma.booking.findUnique({
+  where: {
+    id: bookingId
+  }
+});
+
+    if (!booking) {
+      return res.status(404).json({ error: "BOOKING_NOT_FOUND" });
+    }
+
+    if (booking.status === "CANCELLED") {
+      return res.status(400).json({ error: "BOOKING_ALREADY_CANCELLED" });
+    }
+    const recipient = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (!recipient) {
+      return res.status(404).json({ error: "RECIPIENT_NOT_FOUND" });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await transferBooking(tx, bookingId, recipient.id);
+    });
+
+    return res.json({
+      success: true,
+      message: "Ticket transferred successfully",
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: "TRANSFER_FAILED" });
   }
 });
 
