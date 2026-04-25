@@ -139,6 +139,69 @@ describe("transfer API", () => {
     expect(refreshedEvent?.soldCount).toBe(1);
   });
 
+  it("rejects transfers when the recipient email is missing", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const sender = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 5, soldCount: 1 });
+    const booking = await createBooking(sender.id, event.id, {
+      status: "CONFIRMED",
+    });
+
+    const response = await request(app)
+      .post(`/api/bookings/${booking.id}/transfer`)
+      .set(authHeader(sender))
+      .send({});
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "VALIDATION_ERROR",
+      message: "Recipient email is required",
+    });
+  });
+
+  it("rejects transfers when the recipient user does not exist", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const sender = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 5, soldCount: 1 });
+    const booking = await createBooking(sender.id, event.id, {
+      status: "CONFIRMED",
+    });
+
+    const response = await request(app)
+      .post(`/api/bookings/${booking.id}/transfer`)
+      .set(authHeader(sender))
+      .send({ recipientEmail: "missing-recipient@example.com" });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "NOT_FOUND",
+      message: "Recipient user not found",
+    });
+  });
+
+  it("rejects transfers to the same user", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const sender = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 5, soldCount: 1 });
+    const booking = await createBooking(sender.id, event.id, {
+      status: "CONFIRMED",
+    });
+
+    const response = await request(app)
+      .post(`/api/bookings/${booking.id}/transfer`)
+      .set(authHeader(sender))
+      .send({ recipientEmail: sender.email });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "VALIDATION_ERROR",
+      message: "You cannot transfer a booking to yourself",
+    });
+  });
+
   it("rejects transfers when the recipient already has a waitlisted booking for the same event", async () => {
     const organizer = await createUser("ORGANIZER");
     const sender = await createUser("ATTENDEE");
@@ -206,6 +269,47 @@ describe("transfer API", () => {
       message: "You can only transfer your own bookings",
     });
   });
+
+  it("rejects transfers for cancelled bookings", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const sender = await createUser("ATTENDEE");
+    const recipient = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 5, soldCount: 0 });
+
+    const booking = await createBooking(sender.id, event.id, {
+      status: "CANCELLED",
+      pricePaid: 100,
+    });
+
+    const response = await request(app)
+      .post(`/api/bookings/${booking.id}/transfer`)
+      .set(authHeader(sender))
+      .send({ recipientEmail: recipient.email });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "INVALID_STATUS",
+      message: "Only confirmed bookings can be transferred",
+    });
+  });
+
+  it("returns not found when the booking does not exist", async () => {
+    const sender = await createUser("ATTENDEE");
+    const recipient = await createUser("ATTENDEE");
+
+    const response = await request(app)
+      .post(`/api/bookings/${randomUUID()}/transfer`)
+      .set(authHeader(sender))
+      .send({ recipientEmail: recipient.email });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "NOT_FOUND",
+      message: "Booking not found",
+    });
+  });
 });
 
 describe("waitlist API", () => {
@@ -249,6 +353,96 @@ describe("waitlist API", () => {
     });
   });
 
+  it("rejects waitlist joins when the event does not exist", async () => {
+    const joiningUser = await createUser("ATTENDEE");
+
+    const response = await request(app)
+      .post(`/api/waitlist/${randomUUID()}/join`)
+      .set(authHeader(joiningUser))
+      .send();
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "NOT_FOUND",
+      message: "Event not found",
+    });
+  });
+
+  it("rejects waitlist joins when the event is not published", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const joiningUser = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, {
+      capacity: 1,
+      soldCount: 1,
+      status: "DRAFT",
+    });
+
+    const response = await request(app)
+      .post(`/api/waitlist/${event.id}/join`)
+      .set(authHeader(joiningUser))
+      .send();
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "INVALID_EVENT",
+      message: "Event is not available for waitlist",
+    });
+  });
+
+  it("rejects waitlist joins when the user already has a confirmed booking", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const joiningUser = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 1, soldCount: 1 });
+
+    await createBooking(joiningUser.id, event.id, {
+      status: "CONFIRMED",
+      pricePaid: 100,
+    });
+
+    const response = await request(app)
+      .post(`/api/waitlist/${event.id}/join`)
+      .set(authHeader(joiningUser))
+      .send();
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "DUPLICATE",
+      message: "You already have a confirmed or waitlisted booking for this event",
+    });
+  });
+
+  it("rejects waitlist joins when the user is already waitlisted", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const joiningUser = await createUser("ATTENDEE");
+    const holder = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 1, soldCount: 1 });
+
+    await createBooking(holder.id, event.id, {
+      status: "CONFIRMED",
+      pricePaid: 100,
+    });
+
+    await createBooking(joiningUser.id, event.id, {
+      status: "WAITLISTED",
+      pricePaid: 0,
+    });
+
+    const response = await request(app)
+      .post(`/api/waitlist/${event.id}/join`)
+      .set(authHeader(joiningUser))
+      .send();
+
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "DUPLICATE",
+      message: "You already have a confirmed or waitlisted booking for this event",
+    });
+  });
+
   it("returns the current waitlist position for the authenticated user", async () => {
     const organizer = await createUser("ORGANIZER");
     const firstWaitlistedUser = await createUser("ATTENDEE");
@@ -287,6 +481,23 @@ describe("waitlist API", () => {
     });
   });
 
+  it("returns not found when checking the waitlist position without a waitlist booking", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const attendee = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 1, soldCount: 1 });
+
+    const response = await request(app)
+      .get(`/api/waitlist/${event.id}/position`)
+      .set(authHeader(attendee));
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "NOT_FOUND",
+      message: "Waitlist booking not found",
+    });
+  });
+
   it("leaves the waitlist and removes the booking", async () => {
     const organizer = await createUser("ORGANIZER");
     const waitlistedUser = await createUser("ATTENDEE");
@@ -313,6 +524,23 @@ describe("waitlist API", () => {
     expect(deletedBooking).toBeNull();
   });
 
+  it("returns not found when leaving without a waitlist booking", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const attendee = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 1, soldCount: 1 });
+
+    const response = await request(app)
+      .delete(`/api/waitlist/${event.id}/leave`)
+      .set(authHeader(attendee));
+
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({
+      success: false,
+      error: "NOT_FOUND",
+      message: "Waitlist booking not found",
+    });
+  });
+
   it("rejects waitlist joins when the event is not sold out", async () => {
     const organizer = await createUser("ORGANIZER");
     const joiningUser = await createUser("ATTENDEE");
@@ -328,6 +556,79 @@ describe("waitlist API", () => {
       success: false,
       error: "NOT_SOLD_OUT",
       message: "Event is not sold out",
+    });
+  });
+
+  it("promotes the oldest waitlisted booking when a confirmed booking is cancelled", async () => {
+    const organizer = await createUser("ORGANIZER");
+    const confirmedHolder = await createUser("ATTENDEE");
+    const firstWaitlistedUser = await createUser("ATTENDEE");
+    const secondWaitlistedUser = await createUser("ATTENDEE");
+    const event = await createEvent(organizer.id, { capacity: 1, soldCount: 1 });
+
+    const confirmedBooking = await createBooking(confirmedHolder.id, event.id, {
+      status: "CONFIRMED",
+      pricePaid: 100,
+    });
+
+    const firstWaitlistedBooking = await createBooking(firstWaitlistedUser.id, event.id, {
+      status: "WAITLISTED",
+      pricePaid: 0,
+      createdAt: new Date("2027-01-01T00:00:00.000Z"),
+    });
+
+    const secondWaitlistedBooking = await createBooking(secondWaitlistedUser.id, event.id, {
+      status: "WAITLISTED",
+      pricePaid: 0,
+      createdAt: new Date("2027-01-01T00:01:00.000Z"),
+    });
+
+    const response = await request(app)
+      .delete(`/api/bookings/${confirmedBooking.id}`)
+      .set(authHeader(confirmedHolder));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      message: "Booking cancelled successfully",
+    });
+
+    const cancelledBooking = await prisma.booking.findUnique({
+      where: { id: confirmedBooking.id },
+    });
+    expect(cancelledBooking?.status).toBe("CANCELLED");
+
+    const promotedBooking = await prisma.booking.findUnique({
+      where: { id: firstWaitlistedBooking.id },
+    });
+    expect(promotedBooking?.status).toBe("CONFIRMED");
+    expect(promotedBooking?.ticketCode).not.toBe(firstWaitlistedBooking.ticketCode);
+    expect(promotedBooking?.qrCodeData).not.toBe(firstWaitlistedBooking.qrCodeData);
+
+    const remainingWaitlistedBooking = await prisma.booking.findUnique({
+      where: { id: secondWaitlistedBooking.id },
+    });
+    expect(remainingWaitlistedBooking?.status).toBe("WAITLISTED");
+
+    const refreshedEvent = await prisma.event.findUnique({
+      where: { id: event.id },
+    });
+    expect(refreshedEvent?.soldCount).toBe(1);
+
+    const positionResponse = await request(app)
+      .get(`/api/waitlist/${event.id}/position`)
+      .set(authHeader(secondWaitlistedUser));
+
+    expect(positionResponse.status).toBe(200);
+    expect(positionResponse.body).toMatchObject({
+      success: true,
+      data: {
+        position: 1,
+        booking: {
+          id: secondWaitlistedBooking.id,
+          status: "WAITLISTED",
+        },
+      },
     });
   });
 });

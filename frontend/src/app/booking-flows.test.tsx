@@ -78,8 +78,8 @@ function createEvent(overrides: Partial<Event> = {}): Event {
     id: "event-1",
     name: "Transferable Festival",
     description: "A test event for transfer and waitlist scenarios.",
-    date: "2026-08-20T00:00:00.000Z",
-    time: "2026-08-20T19:30:00.000Z",
+    date: "2028-08-20T00:00:00.000Z",
+    time: "2028-08-20T19:30:00.000Z",
     venue: "Test Arena",
     imageUrl: null,
     artistInfo: "Test Artist",
@@ -92,8 +92,8 @@ function createEvent(overrides: Partial<Event> = {}): Event {
     serviceFeePercent: 5,
     organizerId: "organizer-1",
     seatTiers: [],
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2028-01-01T00:00:00.000Z",
+    updatedAt: "2028-01-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -118,8 +118,8 @@ function createBooking(overrides: Partial<Booking> = {}): Booking {
     event: {
       id: overrides.event?.id ?? "event-1",
       name: eventName,
-      date: overrides.event?.date ?? "2026-08-20T00:00:00.000Z",
-      time: overrides.event?.time ?? "2026-08-20T19:30:00.000Z",
+      date: overrides.event?.date ?? "2028-08-20T00:00:00.000Z",
+      time: overrides.event?.time ?? "2028-08-20T19:30:00.000Z",
       venue: overrides.event?.venue ?? "Test Arena",
       imageUrl: overrides.event?.imageUrl ?? null,
       artistInfo: overrides.event?.artistInfo ?? "Test Artist",
@@ -130,8 +130,8 @@ function createBooking(overrides: Partial<Booking> = {}): Booking {
     },
     seatTier: null,
     promoCode: null,
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
+    createdAt: "2028-01-01T00:00:00.000Z",
+    updatedAt: "2028-01-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -149,7 +149,8 @@ function mockAuthenticatedUser(user: User = originalAttendee) {
 
 describe("transfer and waitlist user journeys", () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    cleanup();
+    jest.resetAllMocks();
     mockPush.mockReset();
 
     (useRouter as jest.Mock).mockReturnValue({ push: mockPush });
@@ -201,8 +202,8 @@ describe("transfer and waitlist user journeys", () => {
       event: {
         id: "event-2",
         name: "Another Event",
-        date: "2026-09-10T00:00:00.000Z",
-        time: "2026-09-10T19:00:00.000Z",
+        date: "2028-09-10T00:00:00.000Z",
+        time: "2028-09-10T19:00:00.000Z",
         venue: "Hall B",
         imageUrl: null,
         artistInfo: "Another Artist",
@@ -245,6 +246,8 @@ describe("transfer and waitlist user journeys", () => {
     expect(bookingsAPI.transfer).toHaveBeenCalledWith("test-token", booking.id, {
       recipientEmail: recipientAttendee.email,
     });
+    expect(screen.getByLabelText(/recipient email/i)).toHaveValue("");
+    expect(screen.getByRole("button", { name: /^transfer$/i })).toBeDisabled();
 
     cleanup();
 
@@ -272,8 +275,8 @@ describe("transfer and waitlist user journeys", () => {
           event: {
             id: "event-1",
             name: "Transferable Festival",
-            date: "2026-08-20T00:00:00.000Z",
-            time: "2026-08-20T19:30:00.000Z",
+            date: "2028-08-20T00:00:00.000Z",
+            time: "2028-08-20T19:30:00.000Z",
             venue: "Test Arena",
             imageUrl: null,
             artistInfo: "Test Artist",
@@ -318,12 +321,13 @@ describe("transfer and waitlist user journeys", () => {
     await user.click(screen.getByRole("button", { name: /^transfer$/i }));
 
     expect(await screen.findByText(/recipient not found/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^transfer$/i })).not.toBeDisabled();
   });
 
   it("Test 5: hides transfer controls for cancelled bookings", async () => {
     const cancelledBooking = createBooking({
       status: "CANCELLED",
-      cancelledAt: "2026-07-01T00:00:00.000Z",
+      cancelledAt: "2028-07-01T00:00:00.000Z",
     });
 
     (bookingsAPI.get as jest.Mock).mockResolvedValue({
@@ -369,7 +373,37 @@ describe("transfer and waitlist user journeys", () => {
     expect(screen.getByRole("button", { name: /download qr code/i })).toBeInTheDocument();
   });
 
-  it("Test 7: returns a successful waitlist join response for a sold-out event", async () => {
+  it("Test 7: shows an error when trying to transfer a ticket to yourself", async () => {
+    const booking = createBooking();
+
+    (bookingsAPI.get as jest.Mock).mockResolvedValue({
+      success: true,
+      data: booking,
+    });
+    (bookingsAPI.getQR as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        qrCode: "data:image/png;base64,VALIDQR",
+        ticketCode: booking.ticketCode,
+      },
+    });
+    (bookingsAPI.transfer as jest.Mock).mockRejectedValue(new Error("You cannot transfer a booking to yourself"));
+
+    const user = userEvent.setup();
+
+    render(<TicketPage />);
+
+    await screen.findByRole("heading", { name: booking.event?.name });
+    await user.type(screen.getByLabelText(/recipient email/i), originalAttendee.email);
+    await user.click(screen.getByRole("button", { name: /^transfer$/i }));
+
+    expect(await screen.findByText(/you cannot transfer a booking to yourself/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^transfer$/i })).not.toBeDisabled();
+  });
+
+  it("Test 8: joins the waitlist from the sold-out event page and shows the returned position", async () => {
+    (useParams as jest.Mock).mockReturnValue({ id: "event-sold-out" });
+
     const soldOutEvent = createEvent({
       id: "event-sold-out",
       name: "Exclusive Chef's Table Dinner",
@@ -377,6 +411,11 @@ describe("transfer and waitlist user journeys", () => {
       soldCount: 2,
     });
 
+    (eventsAPI.get as jest.Mock).mockResolvedValue({
+      success: true,
+      data: soldOutEvent,
+    });
+    (waitlistAPI.position as jest.Mock).mockRejectedValue(new Error("Waitlist booking not found"));
     (waitlistAPI.join as jest.Mock).mockResolvedValue({
       success: true,
       message: "Joined waitlist successfully.",
@@ -403,17 +442,26 @@ describe("transfer and waitlist user journeys", () => {
       },
     });
 
-    expect(soldOutEvent.soldCount).toBe(soldOutEvent.capacity);
+    const user = userEvent.setup();
 
-    const joinResponse = await waitlistAPI.join("test-token", soldOutEvent.id);
+    render(<EventPage />);
 
-    expect(waitlistAPI.join).toHaveBeenCalledWith("test-token", soldOutEvent.id);
-    expect(joinResponse.message).toMatch(/joined waitlist successfully/i);
-    expect(joinResponse.data.position).toBe(1);
-    expect(joinResponse.data.booking.status).toBe("WAITLISTED");
+    expect(await screen.findByRole("heading", { name: soldOutEvent.name })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /join waitlist/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /join waitlist/i }));
+
+    await waitFor(() => {
+      expect(waitlistAPI.join).toHaveBeenCalledWith("test-token", soldOutEvent.id);
+    });
+
+    expect(await screen.findByText(/joined waitlist successfully/i)).toBeInTheDocument();
+    expect(screen.getByText(/your waitlist position/i)).toBeInTheDocument();
+    expect(screen.getByText("#1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /leave waitlist/i })).toBeInTheDocument();
   });
 
-  it("Test 8: displays the waitlist position", async () => {
+  it("Test 9: displays the existing waitlist position", async () => {
     (useParams as jest.Mock).mockReturnValue({ id: "event-sold-out" });
 
     const soldOutEvent = createEvent({
@@ -446,7 +494,71 @@ describe("transfer and waitlist user journeys", () => {
     expect(screen.getByRole("button", { name: /leave waitlist/i })).toBeInTheDocument();
   });
 
-  it("Test 9: shows a confirmed ticket for a user who was automatically promoted from the waitlist after a cancellation", async () => {
+  it("Test 10: shows the duplicate waitlist error and keeps the join action available", async () => {
+    (useParams as jest.Mock).mockReturnValue({ id: "event-sold-out" });
+
+    const soldOutEvent = createEvent({
+      id: "event-sold-out",
+      name: "Exclusive Chef's Table Dinner",
+      capacity: 2,
+      soldCount: 2,
+    });
+
+    (eventsAPI.get as jest.Mock).mockResolvedValue({
+      success: true,
+      data: soldOutEvent,
+    });
+    (waitlistAPI.position as jest.Mock).mockRejectedValue(new Error("Waitlist booking not found"));
+    (waitlistAPI.join as jest.Mock).mockRejectedValue(
+      new Error("You already have a confirmed or waitlisted booking for this event")
+    );
+
+    const user = userEvent.setup();
+
+    render(<EventPage />);
+
+    await waitFor(() => {
+      expect(waitlistAPI.position).toHaveBeenCalledWith("test-token", soldOutEvent.id);
+    });
+
+    const joinWaitlistButton = await screen.findByRole("button", { name: /join waitlist/i });
+    expect(joinWaitlistButton).toBeInTheDocument();
+
+    await user.click(joinWaitlistButton);
+
+    expect(
+      await screen.findByText(/you already have a confirmed or waitlisted booking for this event/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /join waitlist/i })).toBeInTheDocument();
+    expect(screen.queryByText(/your waitlist position/i)).not.toBeInTheDocument();
+  });
+
+  it("Test 11: does not offer waitlist actions for a cancelled sold-out event", async () => {
+    (useParams as jest.Mock).mockReturnValue({ id: "event-cancelled" });
+
+    const cancelledEvent = createEvent({
+      id: "event-cancelled",
+      name: "Cancelled Private Dinner",
+      capacity: 2,
+      soldCount: 2,
+      status: "CANCELLED",
+    });
+
+    (eventsAPI.get as jest.Mock).mockResolvedValue({
+      success: true,
+      data: cancelledEvent,
+    });
+
+    render(<EventPage />);
+
+    expect(await screen.findByRole("heading", { name: cancelledEvent.name })).toBeInTheDocument();
+    expect(screen.getAllByText(/event cancelled/i)).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /join waitlist/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /event cancelled/i })).toBeDisabled();
+    expect(waitlistAPI.position).not.toHaveBeenCalled();
+  });
+
+  it("Test 12: shows a confirmed ticket for a user who was automatically promoted from the waitlist after a cancellation", async () => {
     mockAuthenticatedUser(recipientAttendee);
 
     (bookingsAPI.list as jest.Mock).mockResolvedValue({
@@ -460,8 +572,8 @@ describe("transfer and waitlist user journeys", () => {
           event: {
             id: "event-sold-out",
             name: "Exclusive Chef's Table Dinner",
-            date: "2026-08-30T00:00:00.000Z",
-            time: "2026-08-30T20:00:00.000Z",
+            date: "2028-08-30T00:00:00.000Z",
+            time: "2028-08-30T20:00:00.000Z",
             venue: "Private Kitchen",
             imageUrl: null,
             artistInfo: "Chef Demo",
@@ -482,7 +594,7 @@ describe("transfer and waitlist user journeys", () => {
     expect(screen.queryByRole("button", { name: /leave waitlist/i })).not.toBeInTheDocument();
   });
 
-  it("Test 10: lets a user voluntarily leave the waitlist", async () => {
+  it("Test 13: lets a user voluntarily leave the waitlist from the bookings page", async () => {
     const waitlistedBooking = createBooking({
       id: "waitlist-booking-3",
       status: "WAITLISTED",
@@ -490,8 +602,8 @@ describe("transfer and waitlist user journeys", () => {
       event: {
         id: "event-sold-out",
         name: "Exclusive Chef's Table Dinner",
-        date: "2026-08-30T00:00:00.000Z",
-        time: "2026-08-30T20:00:00.000Z",
+        date: "2028-08-30T00:00:00.000Z",
+        time: "2028-08-30T20:00:00.000Z",
         venue: "Private Kitchen",
         imageUrl: null,
         artistInfo: "Chef Demo",
@@ -539,5 +651,54 @@ describe("transfer and waitlist user journeys", () => {
     });
 
     expect(screen.getByText(/no bookings yet/i)).toBeInTheDocument();
+  });
+
+  it("Test 14: lets a user leave the waitlist from the event page and returns to the join state", async () => {
+    (useParams as jest.Mock).mockReturnValue({ id: "event-sold-out" });
+
+    const soldOutEvent = createEvent({
+      id: "event-sold-out",
+      name: "Exclusive Chef's Table Dinner",
+      capacity: 2,
+      soldCount: 2,
+    });
+
+    (eventsAPI.get as jest.Mock).mockResolvedValue({
+      success: true,
+      data: soldOutEvent,
+    });
+    (waitlistAPI.position as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        booking: createBooking({
+          id: "waitlist-booking-4",
+          status: "WAITLISTED",
+          eventId: soldOutEvent.id,
+        }),
+        position: 2,
+      },
+    });
+    (waitlistAPI.leave as jest.Mock).mockResolvedValue({
+      success: true,
+      message: "Left waitlist successfully.",
+    });
+
+    const user = userEvent.setup();
+
+    render(<EventPage />);
+
+    expect(await screen.findByText(/your waitlist position/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /leave waitlist/i }));
+    expect(await screen.findByText(/you will lose your current position/i)).toBeInTheDocument();
+
+    await user.click(screen.getAllByRole("button", { name: /leave waitlist/i })[1]);
+
+    await waitFor(() => {
+      expect(waitlistAPI.leave).toHaveBeenCalledWith("test-token", soldOutEvent.id);
+    });
+
+    expect(await screen.findByText(/left waitlist successfully/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /join waitlist/i })).toBeInTheDocument();
+    expect(screen.queryByText(/your waitlist position/i)).not.toBeInTheDocument();
   });
 });
