@@ -176,6 +176,13 @@ export const bookingsAPI = {
       token,
     }),
 
+  transfer: (token: string, id: string, data: { recipientEmail: string }) =>
+    fetchAPI<{ success: boolean; data: import("@/types").Booking; message: string }>(`/api/bookings/${id}/transfer`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      token,
+    }),
+
   cancel: (token: string, id: string) =>
     fetchAPI<{
       success: boolean;
@@ -190,6 +197,30 @@ export const bookingsAPI = {
 
   getQR: (token: string, id: string) =>
     fetchAPI<{ success: boolean; data: { qrCode: string; ticketCode: string } }>(`/api/bookings/${id}/qr`, { token }),
+};
+
+// Waitlist API
+export const waitlistAPI = {
+  join: (token: string, eventId: string) =>
+    fetchAPI<{ success: boolean; data: { booking: import("@/types").Booking; position: number }; message: string }>(
+      `/api/waitlist/${eventId}/join`,
+      {
+        method: "POST",
+        token,
+      }
+    ),
+
+  position: (token: string, eventId: string) =>
+    fetchAPI<{ success: boolean; data: { booking: import("@/types").Booking; position: number } }>(
+      `/api/waitlist/${eventId}/position`,
+      { token }
+    ),
+
+  leave: (token: string, eventId: string) =>
+    fetchAPI<{ success: boolean; message: string }>(`/api/waitlist/${eventId}/leave`, {
+      method: "DELETE",
+      token,
+    }),
 };
 
 // Dashboard API

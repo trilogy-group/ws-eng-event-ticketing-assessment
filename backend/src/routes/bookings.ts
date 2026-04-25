@@ -5,6 +5,7 @@ import { authenticate } from "../middleware/auth.js";
 import { generateTicketCode, generateQRData, generateQRCodeDataURL } from "../lib/qr.js";
 import { calculateRefund } from "../lib/refund.js";
 import { incrementCapacity, decrementCapacity } from "../lib/capacity.js";
+import { transferBooking } from "../lib/transfer.js";
 
 // Booking ownership changes: see lib/transfer.ts for the cancel+create utility
 // used by organizer reassignment. For attendee-initiated transfers, consider
@@ -441,6 +442,118 @@ router.post("/", authenticate, async (req, res) => {
   }
 });
 
+// POST /api/bookings/:id/transfer - Transfer booking to another user
+router.post("/:id/transfer", authenticate, async (req, res) => {
+  try {
+    const { recipientEmail } = req.body as { recipientEmail?: string };
+
+    if (!recipientEmail || typeof recipientEmail !== "string") {
+      throw new Error("VALIDATION:Recipient email is required");
+    }
+
+    const newBooking = await prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUnique({
+        where: { id: req.params.id as string },
+      });
+
+      if (!booking) {
+        throw new Error("NOT_FOUND:Booking not found");
+      }
+
+      if (booking.userId !== req.user!.userId) {
+        throw new Error("FORBIDDEN:You can only transfer your own bookings");
+      }
+
+      if (booking.status !== "CONFIRMED") {
+        throw new Error("INVALID_STATUS:Only confirmed bookings can be transferred");
+      }
+
+      const recipient = await tx.user.findUnique({
+        where: { email: recipientEmail },
+      });
+
+      if (!recipient) {
+        throw new Error("NOT_FOUND:Recipient user not found");
+      }
+
+      if (recipient.id === req.user!.userId) {
+        throw new Error("VALIDATION:You cannot transfer a booking to yourself");
+      }
+
+      const existingRecipientBooking = await tx.booking.findFirst({
+        where: {
+          userId: recipient.id,
+          eventId: booking.eventId,
+          status: {
+            in: ["CONFIRMED", "WAITLISTED"],
+          },
+        },
+      });
+
+      if (existingRecipientBooking) {
+        throw new Error("DUPLICATE:Recipient already has a confirmed or waitlisted booking for this event");
+      }
+
+      return transferBooking(tx, booking.id, recipient.id);
+    });
+
+    res.json({
+      success: true,
+      data: newBooking,
+      message: `Booking transferred successfully to ${recipientEmail}`,
+    });
+  } catch (error: unknown) {
+    const err = error as Error;
+    console.error("Error transferring booking:", err);
+
+    if (err.message?.startsWith("NOT_FOUND:")) {
+      return res.status(404).json({
+        success: false,
+        error: "NOT_FOUND",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    if (err.message?.startsWith("FORBIDDEN:")) {
+      return res.status(403).json({
+        success: false,
+        error: "FORBIDDEN",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    if (err.message?.startsWith("INVALID_STATUS:")) {
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_STATUS",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    if (err.message?.startsWith("DUPLICATE:")) {
+      return res.status(409).json({
+        success: false,
+        error: "DUPLICATE",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    if (err.message?.startsWith("VALIDATION:")) {
+      return res.status(400).json({
+        success: false,
+        error: "VALIDATION_ERROR",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: "INTERNAL_ERROR",
+      message: "Failed to transfer booking",
+    });
+  }
+});
+
 // DELETE /api/bookings/:id - Cancel booking with refund calculation
 router.delete("/:id", authenticate, async (req, res) => {
   try {
@@ -494,6 +607,33 @@ router.delete("/:id", authenticate, async (req, res) => {
 
       // Decrement capacity using centralized helper
       await decrementCapacity(tx, booking);
+
+      // Promote the oldest waitlisted booking for this event, if any
+      const waitlistedBooking = await tx.booking.findFirst({
+        where: {
+          eventId: booking.eventId,
+          status: "WAITLISTED",
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+      });
+
+      if (waitlistedBooking) {
+        const promotedTicketCode = generateTicketCode();
+        const promotedQrCodeData = generateQRData(promotedTicketCode);
+
+        await tx.booking.update({
+          where: { id: waitlistedBooking.id },
+          data: {
+            ticketCode: promotedTicketCode,
+            qrCodeData: promotedQrCodeData,
+            status: "CONFIRMED",
+          },
+        });
+
+        await incrementCapacity(tx, waitlistedBooking.eventId, waitlistedBooking.seatTierId);
+      }
 
       // Restore promo code usage if one was applied
       if (booking.promoCodeId) {

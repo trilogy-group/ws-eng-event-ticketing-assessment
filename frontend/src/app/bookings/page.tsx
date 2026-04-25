@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Booking, RefundBreakdown } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
-import { bookingsAPI } from "@/lib/api";
+import { bookingsAPI, waitlistAPI } from "@/lib/api";
 import { formatDate, formatTime, formatCurrency } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -19,10 +19,14 @@ export default function BookingsPage() {
   const { user, token, isLoading: authLoading } = useAuth();
 
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [waitlistPositions, setWaitlistPositions] = useState<Record<string, number>>({});
+  const [waitlistLoading, setWaitlistLoading] = useState<Record<string, boolean>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [cancelId, setCancelId] = useState<string | null>(null);
+  const [leaveWaitlistBooking, setLeaveWaitlistBooking] = useState<Booking | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isLeavingWaitlist, setIsLeavingWaitlist] = useState(false);
   const [refundPreview, setRefundPreview] = useState<RefundBreakdown | null>(null);
   const [isLoadingPreview, setIsLoadingPreview] = useState(false);
   const [cancelSuccess, setCancelSuccess] = useState("");
@@ -40,6 +44,62 @@ export default function BookingsPage() {
       .catch((err) => setError(err.message))
       .finally(() => setIsLoading(false));
   }, [user, token, authLoading, router]);
+
+  useEffect(() => {
+    if (!token) return;
+
+    const waitlistedBookings = bookings.filter((booking) => booking.status === "WAITLISTED" && booking.eventId);
+
+    if (waitlistedBookings.length === 0) {
+      setWaitlistLoading({});
+      return;
+    }
+
+    let isActive = true;
+
+    setWaitlistLoading((current) => {
+      const next: Record<string, boolean> = {};
+
+      waitlistedBookings.forEach((booking) => {
+        next[booking.id] = current[booking.id] ?? true;
+      });
+
+      return next;
+    });
+
+    Promise.all(
+      waitlistedBookings.map(async (booking) => {
+        try {
+          const res = await waitlistAPI.position(token, booking.eventId);
+          if (!isActive) return;
+
+          setWaitlistPositions((current) => ({
+            ...current,
+            [booking.id]: res.data.position,
+          }));
+        } catch {
+          if (!isActive) return;
+
+          setWaitlistPositions((current) => {
+            const next = { ...current };
+            delete next[booking.id];
+            return next;
+          });
+        } finally {
+          if (!isActive) return;
+
+          setWaitlistLoading((current) => ({
+            ...current,
+            [booking.id]: false,
+          }));
+        }
+      })
+    );
+
+    return () => {
+      isActive = false;
+    };
+  }, [bookings, token]);
 
   // Fetch refund preview when cancel modal opens
   useEffect(() => {
@@ -61,7 +121,7 @@ export default function BookingsPage() {
 
     try {
       const res = await bookingsAPI.cancel(token, cancelId);
-      setBookings(bookings.map((b) => (b.id === cancelId ? { ...b, status: "CANCELLED" } : b)));
+      setBookings((current) => current.map((b) => (b.id === cancelId ? { ...b, status: "CANCELLED" } : b)));
       setCancelSuccess(
         res.data.refundAmount > 0
           ? `Booking cancelled. Refund of ${formatCurrency(res.data.refundAmount)} will be processed.`
@@ -75,16 +135,52 @@ export default function BookingsPage() {
     }
   };
 
+  const handleLeaveWaitlist = async () => {
+    if (!token || !leaveWaitlistBooking) return;
+
+    setIsLeavingWaitlist(true);
+
+    try {
+      await waitlistAPI.leave(token, leaveWaitlistBooking.eventId);
+      setBookings((current) => current.filter((booking) => booking.id !== leaveWaitlistBooking.id));
+      setWaitlistPositions((current) => {
+        const next = { ...current };
+        delete next[leaveWaitlistBooking.id];
+        return next;
+      });
+      setWaitlistLoading((current) => {
+        const next = { ...current };
+        delete next[leaveWaitlistBooking.id];
+        return next;
+      });
+      setLeaveWaitlistBooking(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to leave waitlist");
+    } finally {
+      setIsLeavingWaitlist(false);
+    }
+  };
+
   if (authLoading || isLoading) {
-    return <div className="flex items-center justify-center min-h-[50vh]"><Spinner size="lg" /></div>;
+    return (
+      <div className="flex items-center justify-center min-h-[50vh]">
+        <Spinner size="lg" />
+      </div>
+    );
   }
 
   const statusBadge = (status: string) => {
     switch (status) {
-      case "CONFIRMED": return <Badge variant="success">Confirmed</Badge>;
-      case "CHECKED_IN": return <Badge variant="info">Checked In</Badge>;
-      case "CANCELLED": return <Badge variant="danger">Cancelled</Badge>;
-      default: return <Badge>{status}</Badge>;
+      case "CONFIRMED":
+        return <Badge variant="success">Confirmed</Badge>;
+      case "CHECKED_IN":
+        return <Badge variant="info">Checked In</Badge>;
+      case "CANCELLED":
+        return <Badge variant="danger">Cancelled</Badge>;
+      case "WAITLISTED":
+        return <Badge variant="warning">Waitlisted</Badge>;
+      default:
+        return <Badge>{status}</Badge>;
     }
   };
 
@@ -136,6 +232,12 @@ export default function BookingsPage() {
                   {!booking.seatTier && booking.pricePaid > 0 && (
                     <p className="text-sm text-sky-600 font-medium">{formatCurrency(booking.pricePaid)}</p>
                   )}
+                  {booking.status === "WAITLISTED" && waitlistLoading[booking.id] && (
+                    <p className="text-sm text-gray-500 mt-1">Position: loading...</p>
+                  )}
+                  {booking.status === "WAITLISTED" && !waitlistLoading[booking.id] && waitlistPositions[booking.id] !== undefined && (
+                    <p className="text-sm text-sky-600 font-medium mt-1">Position: #{waitlistPositions[booking.id]}</p>
+                  )}
                   <p className="text-xs text-gray-400 mt-1">Ticket: {booking.ticketCode.slice(0, 8).toUpperCase()}</p>
                 </div>
 
@@ -145,8 +247,22 @@ export default function BookingsPage() {
                       <Link href={`/tickets/${booking.id}`}>
                         <Button size="sm">View Ticket</Button>
                       </Link>
-                      <Button size="sm" variant="danger" onClick={() => { setCancelId(booking.id); setCancelSuccess(""); }}>Cancel</Button>
+                      <Button size="sm" variant="danger" onClick={() => { setCancelId(booking.id); setCancelSuccess(""); }}>
+                        Cancel
+                      </Button>
                     </>
+                  )}
+                  {booking.status === "WAITLISTED" && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        setLeaveWaitlistBooking(booking);
+                        setCancelSuccess("");
+                      }}
+                    >
+                      Leave Waitlist
+                    </Button>
                   )}
                   {booking.status === "CANCELLED" && booking.refundAmount > 0 && (
                     <span className="text-xs text-gray-500">Refund: {formatCurrency(booking.refundAmount)}</span>
@@ -195,6 +311,36 @@ export default function BookingsPage() {
           <div className="flex space-x-3">
             <Button variant="secondary" className="flex-1" onClick={() => setCancelId(null)} disabled={isCancelling}>Keep Booking</Button>
             <Button variant="danger" className="flex-1" onClick={handleCancel} isLoading={isCancelling}>Cancel Booking</Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!leaveWaitlistBooking}
+        onClose={() => !isLeavingWaitlist && setLeaveWaitlistBooking(null)}
+        title="Leave Waitlist"
+      >
+        <div className="space-y-4">
+          <p className="text-gray-600">
+            Are you sure you want to leave the waitlist for {leaveWaitlistBooking?.event?.name || "this event"}?
+          </p>
+          <div className="flex space-x-3">
+            <Button
+              variant="secondary"
+              className="flex-1"
+              onClick={() => setLeaveWaitlistBooking(null)}
+              disabled={isLeavingWaitlist}
+            >
+              Keep Spot
+            </Button>
+            <Button
+              variant="danger"
+              className="flex-1"
+              onClick={handleLeaveWaitlist}
+              isLoading={isLeavingWaitlist}
+            >
+              Leave Waitlist
+            </Button>
           </div>
         </div>
       </Modal>

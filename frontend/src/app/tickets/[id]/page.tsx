@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Booking } from "@/types";
 import { useAuth } from "@/contexts/AuthContext";
@@ -8,6 +8,7 @@ import { bookingsAPI } from "@/lib/api";
 import { formatDate, formatTime, formatCurrency } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
 import { Spinner } from "@/components/ui/Spinner";
 import { Alert } from "@/components/ui/Alert";
 
@@ -20,6 +21,10 @@ export default function TicketPage() {
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
+  const [transferEmail, setTransferEmail] = useState("");
+  const [transferError, setTransferError] = useState("");
+  const [transferSuccess, setTransferSuccess] = useState("");
+  const [isTransferring, setIsTransferring] = useState(false);
 
   useEffect(() => {
     if (authLoading) return;
@@ -28,17 +33,67 @@ export default function TicketPage() {
       return;
     }
 
-    Promise.all([
-      bookingsAPI.get(token, params.id as string),
-      bookingsAPI.getQR(token, params.id as string),
-    ])
-      .then(([bookingRes, qrRes]) => {
+    let isActive = true;
+
+    const loadTicket = async () => {
+      try {
+        setIsLoading(true);
+        setError("");
+
+        const bookingRes = await bookingsAPI.get(token, params.id as string);
+
+        if (!isActive) return;
+
         setBooking(bookingRes.data);
-        setQrCode(qrRes.data.qrCode);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setIsLoading(false));
+
+        if (bookingRes.data.status === "CONFIRMED") {
+          const qrRes = await bookingsAPI.getQR(token, params.id as string);
+
+          if (!isActive) return;
+
+          setQrCode(qrRes.data.qrCode);
+        } else {
+          setQrCode(null);
+        }
+      } catch (err) {
+        if (!isActive) return;
+        setError(err instanceof Error ? err.message : "Failed to load ticket");
+      } finally {
+        if (isActive) {
+          setIsLoading(false);
+        }
+      }
+    };
+
+    loadTicket();
+
+    return () => {
+      isActive = false;
+    };
   }, [user, token, authLoading, router, params.id]);
+
+  const handleTransfer = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+
+    if (!token || !booking) return;
+
+    try {
+      setIsTransferring(true);
+      setTransferError("");
+      setTransferSuccess("");
+
+      const response = await bookingsAPI.transfer(token, booking.id, {
+        recipientEmail: transferEmail,
+      });
+
+      setTransferSuccess(response.message);
+      setTransferEmail("");
+    } catch (err) {
+      setTransferError(err instanceof Error ? err.message : "Failed to transfer ticket");
+    } finally {
+      setIsTransferring(false);
+    }
+  };
 
   if (authLoading || isLoading) {
     return <div className="flex items-center justify-center min-h-[50vh]"><Spinner size="lg" /></div>;
@@ -114,6 +169,33 @@ export default function TicketPage() {
               <Button variant="ghost" className="w-full" onClick={() => router.push("/bookings")}>
                 Back to Bookings
               </Button>
+            </div>
+
+            <div className="border-t pt-6 space-y-4 text-left">
+              <div className="text-center">
+                <h2 className="text-lg font-semibold text-gray-900">Transfer Ticket</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  Transfer this confirmed ticket to another registered user by email.
+                </p>
+              </div>
+
+              {transferSuccess && <Alert variant="success">{transferSuccess}</Alert>}
+              {transferError && <Alert variant="error">{transferError}</Alert>}
+
+              <form className="space-y-3" onSubmit={handleTransfer}>
+                <Input
+                  type="email"
+                  label="Recipient Email"
+                  placeholder="recipient@example.com"
+                  value={transferEmail}
+                  onChange={(e) => setTransferEmail(e.target.value)}
+                  disabled={isTransferring || !!transferSuccess}
+                  required
+                />
+                <Button type="submit" className="w-full" isLoading={isTransferring} disabled={!!transferSuccess}>
+                  Transfer
+                </Button>
+              </form>
             </div>
           </CardContent>
         </Card>
