@@ -4,7 +4,6 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
 }
 
 model User {
@@ -20,6 +19,7 @@ model User {
 
   organizedEvents Event[]   @relation("OrganizerEvents")
   bookings        Booking[]
+  waitlists       Waitlist[]
 
   @@index([email])
 }
@@ -46,6 +46,7 @@ model Event {
   organizerId String
   organizer   User       @relation("OrganizerEvents", fields: [organizerId], references: [id])
   bookings    Booking[]
+  waitlists   Waitlist[]
   seatTiers   SeatTier[]
   promoCodes  PromoCode[]
 
@@ -91,6 +92,21 @@ model PromoCode {
 
   @@unique([eventId, code])
   @@index([eventId])
+}
+model Waitlist {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  userId  String
+  user    User   @relation(fields: [userId], references: [id])
+
+  eventId String
+  event   Event  @relation(fields: [eventId], references: [id])
+
+  position Int
+
+  @@unique([userId, eventId])
+  @@index([eventId, position])
 }
 
 model Booking {

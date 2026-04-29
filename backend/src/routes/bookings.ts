@@ -5,6 +5,12 @@ import { authenticate } from "../middleware/auth.js";
 import { generateTicketCode, generateQRData, generateQRCodeDataURL } from "../lib/qr.js";
 import { calculateRefund } from "../lib/refund.js";
 import { incrementCapacity, decrementCapacity } from "../lib/capacity.js";
+import { z } from "zod";
+import { allocateNextFromWaitlist } from "./waitlist";
+
+const transferSchema = z.object({
+  email: z.string().email("Valid email is required"),
+});
 
 // Booking ownership changes: see lib/transfer.ts for the cancel+create utility
 // used by organizer reassignment. For attendee-initiated transfers, consider
@@ -172,7 +178,7 @@ router.get("/:id/refund-preview", authenticate, async (req, res) => {
       booking.pricePaid,
       new Date(booking.event.date),
       booking.event.refundPolicy,
-      booking.event.serviceFeePercent
+      booking.event.serviceFeePercent,
     );
 
     res.json({
@@ -291,7 +297,7 @@ router.post("/", authenticate, async (req, res) => {
         // Check minimum purchase amount
         if (promo.minPurchaseAmount && ticketPrice < promo.minPurchaseAmount) {
           throw new Error(
-            `MIN_PURCHASE:Minimum purchase of $${promo.minPurchaseAmount.toFixed(2)} required for this code`
+            `MIN_PURCHASE:Minimum purchase of $${promo.minPurchaseAmount.toFixed(2)} required for this code`,
           );
         }
 
@@ -441,6 +447,113 @@ router.post("/", authenticate, async (req, res) => {
   }
 });
 
+router.post("/:id/transfer", authenticate, async (req, res) => {
+  try {
+    const bookingId = req.params.id as string; // ✅ FIX HERE
+
+    const result = transferSchema.safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        error: "VALIDATION_ERROR",
+        message: result.error.errors[0].message,
+      });
+    }
+
+    const { email } = result.data;
+
+    const updatedBooking = await prisma.$transaction(async (tx) => {
+      const booking = await tx.booking.findUnique({
+        where: { id: bookingId }, // ✅ now valid
+      });
+
+      if (!booking) {
+        throw new Error("NOT_FOUND:Booking not found");
+      }
+
+      if (booking.userId !== req.user!.userId) {
+        throw new Error("FORBIDDEN:You do not own this ticket");
+      }
+
+      if (booking.status !== "CONFIRMED") {
+        throw new Error("INVALID:Only confirmed tickets can be transferred");
+      }
+
+      const recipient = await tx.user.findUnique({
+        where: { email },
+      });
+
+      if (!recipient) {
+        throw new Error("NOT_FOUND:Recipient not found");
+      }
+
+      if (recipient.id === booking.userId) {
+        throw new Error("VALIDATION:Cannot transfer to yourself");
+      }
+
+      const updated = await tx.booking.update({
+        where: { id: bookingId },
+        data: {
+          userId: recipient.id,
+        },
+        include: {
+          event: true,
+          seatTier: true,
+        },
+      });
+
+      return updated;
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: updatedBooking,
+      message: "Ticket transferred successfully",
+    });
+  } catch (error: unknown) {
+    const err = error as Error;
+    console.error("Error transferring ticket:", err);
+
+    if (err.message?.startsWith("NOT_FOUND:")) {
+      return res.status(404).json({
+        success: false,
+        error: "NOT_FOUND",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    if (err.message?.startsWith("FORBIDDEN:")) {
+      return res.status(403).json({
+        success: false,
+        error: "FORBIDDEN",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    if (err.message?.startsWith("INVALID:")) {
+      return res.status(400).json({
+        success: false,
+        error: "INVALID_OPERATION",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    if (err.message?.startsWith("VALIDATION:")) {
+      return res.status(400).json({
+        success: false,
+        error: "VALIDATION_ERROR",
+        message: err.message.split(":")[1],
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      error: "INTERNAL_ERROR",
+      message: "Failed to transfer ticket",
+    });
+  }
+});
+
 // DELETE /api/bookings/:id - Cancel booking with refund calculation
 router.delete("/:id", authenticate, async (req, res) => {
   try {
@@ -466,7 +579,7 @@ router.delete("/:id", authenticate, async (req, res) => {
         throw new Error(
           booking.status === "CANCELLED"
             ? "ALREADY_CANCELLED:This booking has already been cancelled"
-            : "INVALID_STATUS:Only confirmed bookings can be cancelled"
+            : "INVALID_STATUS:Only confirmed bookings can be cancelled",
         );
       }
 
@@ -475,7 +588,7 @@ router.delete("/:id", authenticate, async (req, res) => {
         booking.pricePaid,
         new Date(booking.event.date),
         booking.event.refundPolicy,
-        booking.event.serviceFeePercent
+        booking.event.serviceFeePercent,
       );
 
       if (!refund.canCancel) {
@@ -503,18 +616,19 @@ router.delete("/:id", authenticate, async (req, res) => {
         });
       }
 
-      return refund;
+      return { refund, eventId: booking.eventId };
     });
 
     res.json({
       success: true,
       message: "Booking cancelled successfully",
       data: {
-        refundAmount: result.finalRefund,
-        refundPercentage: result.refundPercentage,
-        serviceFee: result.serviceFee,
+        refundAmount: result.refund.finalRefund,
+        refundPercentage: result.refund.refundPercentage,
+        serviceFee: result.refund.serviceFee,
       },
     });
+    await allocateNextFromWaitlist(result.eventId);
   } catch (error: unknown) {
     const err = error as Error;
     console.error("Error cancelling booking:", err);

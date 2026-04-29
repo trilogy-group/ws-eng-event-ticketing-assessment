@@ -44,8 +44,7 @@ export const authAPI = {
       body: JSON.stringify(data),
     }),
 
-  me: (token: string) =>
-    fetchAPI<{ success: boolean; data: import("@/types").User }>("/api/auth/me", { token }),
+  me: (token: string) => fetchAPI<{ success: boolean; data: import("@/types").User }>("/api/auth/me", { token }),
 
   updateProfile: (token: string, data: { name?: string }) =>
     fetchAPI<{ success: boolean; data: import("@/types").User }>("/api/auth/profile", {
@@ -59,14 +58,13 @@ export const authAPI = {
 export const eventsAPI = {
   list: (category?: string) =>
     fetchAPI<{ success: boolean; data: import("@/types").Event[] }>(
-      `/api/events${category ? `?category=${category}` : ""}`
+      `/api/events${category ? `?category=${category}` : ""}`,
     ),
 
   listAll: (token: string) =>
     fetchAPI<{ success: boolean; data: import("@/types").Event[] }>("/api/events/all", { token }),
 
-  get: (id: string) =>
-    fetchAPI<{ success: boolean; data: import("@/types").Event }>(`/api/events/${id}`),
+  get: (id: string) => fetchAPI<{ success: boolean; data: import("@/types").Event }>(`/api/events/${id}`),
 
   create: (token: string, data: Partial<import("@/types").Event>) =>
     fetchAPI<{ success: boolean; data: import("@/types").Event }>("/api/events", {
@@ -85,7 +83,7 @@ export const eventsAPI = {
   delete: (token: string, id: string) =>
     fetchAPI<{ success: boolean; data?: { totalBookingsCancelled: number; totalRefundAmount: number } }>(
       `/api/events/${id}`,
-      { method: "DELETE", token }
+      { method: "DELETE", token },
     ),
 
   getAttendees: (token: string, id: string) =>
@@ -104,7 +102,12 @@ export const tiersAPI = {
       token,
     }),
 
-  update: (token: string, eventId: string, tierId: string, data: Partial<{ name: string; price: number; capacity: number }>) =>
+  update: (
+    token: string,
+    eventId: string,
+    tierId: string,
+    data: Partial<{ name: string; price: number; capacity: number }>,
+  ) =>
     fetchAPI<{ success: boolean; data: import("@/types").SeatTier }>(`/api/events/${eventId}/tiers/${tierId}`, {
       method: "PUT",
       body: JSON.stringify(data),
@@ -118,7 +121,9 @@ export const tiersAPI = {
 // Promo Codes API
 export const promoCodesAPI = {
   list: (token: string, eventId: string) =>
-    fetchAPI<{ success: boolean; data: import("@/types").PromoCode[] }>(`/api/events/${eventId}/promo-codes`, { token }),
+    fetchAPI<{ success: boolean; data: import("@/types").PromoCode[] }>(`/api/events/${eventId}/promo-codes`, {
+      token,
+    }),
 
   create: (
     token: string,
@@ -132,7 +137,7 @@ export const promoCodesAPI = {
       validUntil?: string | null;
       minPurchaseAmount?: number | null;
       maxDiscountAmount?: number | null;
-    }
+    },
   ) =>
     fetchAPI<{ success: boolean; data: import("@/types").PromoCode }>(`/api/events/${eventId}/promo-codes`, {
       method: "POST",
@@ -183,6 +188,14 @@ export const bookingsAPI = {
       data: { refundAmount: number; refundPercentage: number; serviceFee: number };
     }>(`/api/bookings/${id}`, { method: "DELETE", token }),
 
+  // ✅ ADD HERE
+  transfer: (token: string, bookingId: string, email: string) =>
+    fetchAPI<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/transfer`, {
+      method: "POST",
+      body: JSON.stringify({ email }),
+      token,
+    }),
+
   getRefundPreview: (token: string, id: string) =>
     fetchAPI<{ success: boolean; data: import("@/types").RefundBreakdown }>(`/api/bookings/${id}/refund-preview`, {
       token,
@@ -201,7 +214,10 @@ export const dashboardAPI = {
     fetchAPI<{ success: boolean; data: import("@/types").EventStats }>(`/api/dashboard/events/${id}/stats`, { token }),
 
   getVelocity: (token: string) =>
-    fetchAPI<{ success: boolean; data: { hour: string; count: number; revenue: number }[] }>("/api/dashboard/velocity", {
-      token,
-    }),
+    fetchAPI<{ success: boolean; data: { hour: string; count: number; revenue: number }[] }>(
+      "/api/dashboard/velocity",
+      {
+        token,
+      },
+    ),
 };

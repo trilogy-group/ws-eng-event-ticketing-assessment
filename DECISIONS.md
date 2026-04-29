@@ -1,23 +1,58 @@
-# Engineering Decisions
+1. Overview
+   Implement:
+   Ticket transfer (immediate ownership change)
+   Event waitlist (queue + auto-allocation)
+2. Ticket Transfer Design
 
-Document your implementation approach, key decisions, and any questions or assumptions here. This is your primary planning artifact — write it before you start coding.
+Key decisions:
 
-Keep it concise (~500 words). We care about the reasoning behind your choices, not the length.
+Use existing transfer.ts utility (extend if needed).
+Identify recipient via email → user lookup.
+Transfer = update booking.userId.
 
----
+Rules enforced:
 
-## Problem Understanding
+Only CONFIRMED bookings.
+Recipient must exist.
+Remove ticket from sender automatically (ownership change).
 
-*What are you building? What are the key challenges? What's unclear or missing from the requirements?*
+QR Code
 
-## Approach
+Already tied to booking → no change needed.
 
-*How will you model the data? What's your implementation strategy? Why this approach over alternatives?*
+Error handling:
 
-## Risks & Assumptions
+User not found → "Recipient not found"
+Cancelled ticket → "Cannot transfer cancelled ticket" 3. Waitlist Design
 
-*What could go wrong? What assumptions are you making? What questions would you ask the product manager?*
+Data model (if not already present):
 
-## Implementation Sequence
+Waitlist table:
+id
+eventId
+userId
+createdAt (for queue order)
 
-*What order will you work in? What do you tackle first and why?*
+Queue logic:
+
+FIFO using createdAt
+
+Flow:
+
+Event sold out → allow waitlist join
+On cancellation:
+Find next waitlisted user
+Create confirmed booking
+Remove from waitlist
+
+User features:
+
+Join waitlist
+Leave waitlist
+View position 4. Assumptions
+One waitlist entry per user per event
+Auto-allocation happens immediately on cancellation
+No email notifications required 5. Risks / Edge Cases
+Duplicate waitlist entries → prevent
+Race conditions → assume low concurrency (acceptable for assessment)
+Capacity sync → reuse capacity.ts
