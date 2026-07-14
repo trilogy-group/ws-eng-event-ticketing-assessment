@@ -1,23 +1,60 @@
-# Engineering Decisions
+# Story 1 – Ticket Transfer
 
-Document your implementation approach, key decisions, and any questions or assumptions here. This is your primary planning artifact — write it before you start coding.
+## Existing Design
 
-Keep it concise (~500 words). We care about the reasoning behind your choices, not the length.
+- Booking owns ticket information.
+- QR code already exists.
+- Transfer utility exists.
+
+## Decision
+
+Reuse Booking instead of creating a new Ticket.
+
+Transfer ownership by updating booking.userId.
+
+## Why
+
+- Minimal schema changes.
+- Keeps QR code.
+- Reuses existing booking flow.
+- Lower maintenance cost.
 
 ---
 
-## Problem Understanding
+# Story 2 – Waitlist
 
-*What are you building? What are the key challenges? What's unclear or missing from the requirements?*
+## Existing Design
 
-## Approach
+Capacity checking already exists.
 
-*How will you model the data? What's your implementation strategy? Why this approach over alternatives?*
+Cancellation already exists.
 
-## Risks & Assumptions
+## Decision
 
-*What could go wrong? What assumptions are you making? What questions would you ask the product manager?*
+Introduce FIFO waitlist.
 
-## Implementation Sequence
+On cancellation
 
-*What order will you work in? What do you tackle first and why?*
+cancel booking
+
+↓
+
+check waitlist
+
+↓
+
+allocate booking
+
+↓
+
+remove waitlist entry
+
+## Why
+
+Simple.
+
+No scheduler.
+
+No background workers.
+
+Immediate allocation satisfies requirements.
